@@ -17,3 +17,4 @@ GRANT dba TO test;
 SELECT * FROM dba_tables WHERE owner='test';
 
 ```
+GOOS=linux GOARCH=amd64 go build -o close_slow_sql main.go

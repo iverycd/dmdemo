@@ -3,10 +3,12 @@ package main
 import (
 	"database/sql"
 	_ "dm"
+	"dmdemo/config"
+	"dmdemo/loggerzap"
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"go.uber.org/zap"
 	"strings"
 	"time"
 )
@@ -42,10 +44,10 @@ func killSlow(sqlStr string) {
 	dsn := fmt.Sprintf("dm://SYSDBA:%s@%s:5236?appName=MacPro&connectTimeout=3000&clientEncoding=GB18030", Pwd[0], Host[0])
 	db, err := sql.Open("dm", dsn)
 	if err != nil {
-		log.Fatal(err)
+		loggerzap.L().Fatal("", zap.Error(err))
 		return
 	}
-
+	loggerzap.L().Info("连接数据库成功")
 	var sqlRet, sql_text, user_name, clnt_ip, clnt_host, appname, osname, clnt_type, last_send_time string
 	// 创建一个每隔1秒触发一次的Ticker
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -53,13 +55,13 @@ func killSlow(sqlStr string) {
 	for range ticker.C {
 		rows, err := db.Query(sqlStr)
 		if err != nil {
-			log.Fatal(err)
+			loggerzap.L().Fatal("", zap.Error(err))
 			return
 		}
 		for rows.Next() {
 			err := rows.Scan(&sqlRet, &sql_text, &user_name, &clnt_ip, &clnt_host, &appname, &osname, &clnt_type, &last_send_time)
 			if err != nil {
-				log.Fatal(err)
+				loggerzap.L().Fatal("", zap.Error(err))
 				return
 			}
 			sqlRet = strings.ReplaceAll(sqlRet, "\n", "")
@@ -71,20 +73,32 @@ func killSlow(sqlStr string) {
 			osname = strings.ReplaceAll(osname, "\n", "")
 			clnt_type = strings.ReplaceAll(clnt_type, "\n", "")
 			last_send_time = strings.ReplaceAll(last_send_time, "\n", "")
-			fmt.Println(sqlRet,
-				sql_text,
-				user_name,
-				clnt_ip,
-				clnt_host,
-				appname,
-				osname,
-				clnt_type,
-				last_send_time)
+
+			//fmt.Println(sqlRet,
+			//	sql_text,
+			//	user_name,
+			//	clnt_ip,
+			//	clnt_host,
+			//	appname,
+			//	osname,
+			//	clnt_type,
+			//	last_send_time)
 			_, err = db.Exec(sqlRet)
 			if err != nil {
-				log.Fatal(err)
+				loggerzap.L().Fatal("", zap.Error(err))
 				return
 			}
+			loggerzap.L().Info("sql",
+				zap.String("sqlRet", sqlRet),
+				zap.String("sql_text", sql_text),
+				zap.String("user_name", user_name),
+				zap.String("clnt_ip", clnt_ip),
+				zap.String("clnt_host", clnt_host),
+				zap.String("appname", appname),
+				zap.String("osname", osname),
+				zap.String("clnt_type", clnt_type),
+				zap.String("last_send_time", last_send_time),
+			)
 		}
 	}
 
@@ -109,7 +123,30 @@ func basicConn() {
 	fmt.Println(id, col2)
 }
 func main() {
+	//全局panic捕获
+	defer func() {
+		if r := recover(); r != nil {
+			loggerzap.L().Panic("panic", zap.Any("error", r))
+		}
+	}()
+
+	// 初始化zap配置
+	logCfg := &config.LogConfig{
+		Level:      "info",
+		FilePath:   "logs/run.log",
+		MaxSize:    100, // 100MB
+		MaxBackups: 20,  // 控制保留的历史文件数量上限
+		//MaxAge:   5, // 日志文件的最大保留天数
+		Compress: false,
+	}
+
+	// 初始化日志
+	if err := loggerzap.Init("production", logCfg); err != nil {
+		panic(err)
+	}
+	defer loggerzap.Sync()
 	//sqlStr := "select 'call sp_close_session('||a.sess_id||');',a.sql_text,a.user_name,a.clnt_ip from v$sessions a   where   a.sql_text like '%DBMS_METADATA%' and a.user_name !='SYSDBA';"
+	//sqlStr := "select 'call sp_close_session('||a.sess_id||');',a.sql_text,a.user_name,a.clnt_ip,a.clnt_host,a.appname,a.osname,a.clnt_type,a.last_send_time from v$sessions a   where   (a.sql_text like '%as table_cat%' or a.sql_text like '%DBMS_METADATA%' or a.sql_text like '%gateway metadata JDBC_getColumns(%') and a.user_name !='SYSDBA';"
 	sqlStr := "select 'call sp_close_session('||a.sess_id||');',a.sql_text,a.user_name,a.clnt_ip,a.clnt_host,a.appname,a.osname,a.clnt_type,a.last_send_time from v$sessions a   where   (a.sql_text like '%DBMS_METADATA%' or a.sql_text like '%gateway metadata JDBC_getColumns(%') and a.user_name !='SYSDBA';"
 	killSlow(sqlStr)
 }
